@@ -1,5 +1,6 @@
 host: localhost
-port: 3000
+approot: "https://localhost:50000"
+port: 50000
 repository_path: wikidata
 repository_type: git
 page_extension: .page

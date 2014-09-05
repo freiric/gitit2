@@ -1,0 +1,10 @@
+_ TODO 
+  _ cope with environement (development, test, staging, production)
+    _fromArgsSetting
+  _ reference to other config files, e.g. within a config.d (with or without env)
+  _ template to start a new site in the style of yesod
+  _ adding config option should not break existing code (private constructor)
+
+_ DONE
+  _ command-line option to specify config file? (but what about rest of config dir?)
+  _ several config files

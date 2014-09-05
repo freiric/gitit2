@@ -1,0 +1,7 @@
+# To override defaults from settings.yaml 
+# > gitit2 -f example_githubsetting.yaml
+port: 30000
+approot: "https://mydomain.com"
+github:
+  clientId: 0123456789abcdef0123
+  clientSecret: 0123456789abcdef0123456789abcdef01234567 

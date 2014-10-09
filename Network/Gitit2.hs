@@ -350,6 +350,7 @@ getViewR :: HasGitit master => Page -> GH master Html
 getViewR page = do
   pathForPage page >>= tryCache
   pathForFile page >>= tryCache
+  -- tryCache for toc and toc of subpages
   view Nothing page
 
 postPreviewR :: HasGitit master => GH master Html
@@ -374,6 +375,7 @@ view mbrev page = do
   mbcont <- getRawContents path mbrev
   case mbcont of
        Just contents -> do
+         -- TODO: store toc of page
          wikipage <- contentsToWikiPage page contents
          htmlContents <- pageToHtml wikipage
          let mbcache = if wpCacheable wikipage && isNothing mbrev
@@ -533,6 +535,7 @@ contentsToWikiPage page contents = do
   let doc = reader $ toString b
   let pageToPrefix (Page []) = T.empty
       pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
+  -- TODO: parse and fetch toc of subpages (beware of cycle)
   Pandoc _ blocks <- sanitizePandoc <$> addWikiLinks (pageToPrefix page) doc
   foldM applyPlugin
            WikiPage {

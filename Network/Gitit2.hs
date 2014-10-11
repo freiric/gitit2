@@ -30,13 +30,15 @@ import Data.Char (toLower)
 import System.FilePath
 import Data.List (inits, find, sortBy, isPrefixOf, sort, nub, intercalate)
 import Text.Pandoc
+import Text.Pandoc.Writers.HTML (tableOfContents, defaultWriterState)
 import Text.Pandoc.Writers.RTF (writeRTFWithEmbeddedImages)
 import Text.Pandoc.PDF (makePDF)
-import Text.Pandoc.Shared (stringify, inDirectory, readDataFileUTF8)
+import Text.Pandoc.Shared (stringify, inDirectory, readDataFileUTF8, Element, hierarchicalize)
 import Text.Pandoc.SelfContained (makeSelfContained)
 import Text.Pandoc.Builder (toList, text)
 import Control.Applicative
 import Control.Monad (when, unless, filterM, mplus, foldM)
+import Control.Monad.State
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.ByteString.Lazy (ByteString, fromChunks)
@@ -382,7 +384,9 @@ view mbrev page = do
                           then caching path
                           else id
          mbcache $ layout [ViewTab,EditTab,HistoryTab,DiscussTab]
-                            (wpCategories wikipage) htmlContents
+                            (wpTocHierarchy wikipage) 
+                            (wpCategories wikipage) 
+                            htmlContents
        Nothing -> do
          path' <- pathForFile page
          mbcont' <- getRawContents path' mbrev
@@ -394,14 +398,15 @@ view mbrev page = do
               Just contents
                | is_source -> do
                    htmlContents <- sourceToHtml path' contents
-                   caching path' $ layout [ViewTab,HistoryTab] [] htmlContents
+                   caching path' $ layout [ViewTab,HistoryTab] [] [] htmlContents
                | otherwise -> do
                   ct <- getMimeType path'
                   let content = toContent contents
                   caching path' (return (ct, content)) >>= sendResponse
-   where layout tabs categories cont = do
+   where layout tabs tocHierarchy categories cont = do
            toMaster <- getRouteToParent
            contw <- toWikiPage cont
+--           toc <- extractToc tocHierarchy 
            makePage pageLayout{ pgName = Just page
                               , pgPageTools = True
                               , pgTabs = tabs
@@ -431,6 +436,19 @@ view mbrev page = do
                                $forall category <- categories
                                  <li><a href=@{toMaster $ CategoryR category}>#{category}
                        |]
+                       -- tocWidget <- [whamlet|
+                       --               ^{toc}
+                       -- |]
+
+extractToc :: HasGitit master => [Element] -> GH master (WidgetT master IO ())
+extractToc tocHierrarchy = do
+   Just tocRendered <- return $ evalState (tableOfContents def{
+               writerWrapText = False
+             , writerHtml5 = True
+             , writerHighlight = True
+             , writerHTMLMathMethod = MathML Nothing
+             }  tocHierrarchy) defaultWriterState
+   return $ toWidget tocRendered
 
 getIndexBaseR :: HasGitit master => GH master Html
 getIndexBaseR = getIndexFor []
@@ -532,11 +550,13 @@ contentsToWikiPage page contents = do
   let fromBool (Bool t) = t
       fromBool _        = False
   let toc = maybe False fromBool (M.lookup "toc" metadata)
+  liftIO $ print $ "toc: "++ show toc
   let doc = reader $ toString b
   let pageToPrefix (Page []) = T.empty
       pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
   -- TODO: parse and fetch toc of subpages (beware of cycle)
   Pandoc _ blocks <- sanitizePandoc <$> addWikiLinks (pageToPrefix page) doc
+  let tocHierarchy = hierarchicalize blocks
   foldM applyPlugin
            WikiPage {
              wpName        = pageToText page
@@ -548,6 +568,7 @@ contentsToWikiPage page contents = do
            , wpMetadata    = metadata
            , wpCacheable   = True
            , wpContent     = blocks
+           , wpTocHierarchy = tocHierarchy
            } plugins'
 
 sourceToHtml :: HasGitit master
@@ -749,7 +770,7 @@ update' mbrevid page = do
          path <- pathForPage page
          case mbrevid of
            Just revid -> do
-              mres <- liftIO $ modify fs path revid auth comm cont
+              mres <- liftIO $ FS.modify fs path revid auth comm cont
               case mres of
                    Right () -> do
                       expireCache path

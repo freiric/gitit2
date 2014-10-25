@@ -40,8 +40,9 @@ import Control.Applicative
 import Control.Monad (when, unless, filterM, mplus, foldM)
 import Control.Monad.State
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Text (Text)
-import Data.ByteString.Lazy (ByteString, fromChunks)
+import Data.ByteString.Lazy (ByteString, fromChunks, pack, hGetContents)
 import qualified Data.ByteString.Lazy.Char8 as B
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
@@ -68,6 +69,8 @@ import Network.HTTP.Base (urlEncode, urlDecode)
 import qualified Data.Set as Set
 
 import Network.Gitit2.Routes
+import qualified Data.Aeson as A
+import Data.Text.Lazy.Encoding
 
 -- This is defined in GHC 7.04+, but for compatibility we define it here.
 infixr 5 <>
@@ -218,6 +221,17 @@ pathForPage p = do
   conf <- getConfig
   return $ T.unpack (toMessage p) <> page_extension conf
 
+pathForToc :: Page -> GH master FilePath
+pathForToc p = do
+  conf <- getConfig
+  return $ T.unpack (toMessage p) <> page_extension conf </> "toc"
+
+pathForCatgories :: Page -> GH master FilePath
+pathForCatgories p = do
+  conf <- getConfig
+  return $ T.unpack (toMessage p) <> page_extension conf </> "categories"
+
+
 pathForFile :: Page -> GH master FilePath
 pathForFile p = return $ T.unpack $ toMessage p
 
@@ -350,10 +364,15 @@ postDeleteR page = do
 
 getViewR :: HasGitit master => Page -> GH master Html
 getViewR page = do
-  pathForPage page >>= tryCache
   pathForFile page >>= tryCache
+-- reorganize code
+  mbTocAndPageHtml <- do
+    mbPageHtml <- pathForPage page >>= tryPageCache
+    mbTocPandoc <- pathForToc page >>= tryTocCache
+    mbCatTexts <- pathForCatgories page >>= tryCatCache
+    return $ (,,) <$>  mbTocPandoc <*> mbCatTexts <*> mbPageHtml
   -- tryCache for toc and toc of subpages
-  view Nothing page
+  view Nothing mbTocAndPageHtml page
 
 postPreviewR :: HasGitit master => GH master Html
 postPreviewR =
@@ -369,23 +388,31 @@ getMimeType fp = do
          $ M.lookup (drop 1 $ takeExtension fp) mimeTypes
 
 getRevisionR :: HasGitit master => RevisionId -> Page -> GH master Html
-getRevisionR rev = view (Just rev)
+getRevisionR rev = view (Just rev) Nothing
 
-view :: HasGitit master => Maybe RevisionId -> Page -> GH master Html
-view mbrev page = do
+view :: HasGitit master => Maybe RevisionId -> Maybe ([Element], [Text], Html) -> Page -> GH master Html
+view mbrev mbTocAndPageHtml page = do
   path <- pathForPage page
+  tocPath <- pathForToc page
+  catPath <- pathForCatgories page
   mbcont <- getRawContents path mbrev
   case mbcont of
        Just contents -> do
          -- TODO: store toc of page
-         wikipage <- contentsToWikiPage page contents
-         htmlContents <- pageToHtml wikipage
-         let mbcache = if wpCacheable wikipage && isNothing mbrev
-                          then caching path
-                          else id
-         mbcache $ layout [ViewTab,EditTab,HistoryTab,DiscussTab]
-                            (wpTocHierarchy wikipage) 
-                            (wpCategories wikipage) 
+
+         (tocHierarchy, categories, htmlContents) <-
+             maybe (do wikipage <- contentsToWikiPage page contents
+                       htmlContents <- caching path $ pageToHtml wikipage
+                       let tocHierarchy = wpTocHierarchy wikipage
+                           categories = wpCategories wikipage
+                       cacheLBS tocPath $ A.encode tocHierarchy
+                       cacheLBS catPath $ pack $ read $ show categories
+                       return (tocHierarchy, categories, htmlContents))
+             return
+             mbTocAndPageHtml
+         layout [ViewTab,EditTab,HistoryTab,DiscussTab]
+                            tocHierarchy
+                            categories
                             htmlContents
        Nothing -> do
          path' <- pathForFile page
@@ -406,7 +433,7 @@ view mbrev page = do
    where layout tabs tocHierarchy categories cont = do
            toMaster <- getRouteToParent
            contw <- toWikiPage cont
---           toc <- extractToc tocHierarchy 
+           toc <- extractToc tocHierarchy
            makePage pageLayout{ pgName = Just page
                               , pgPageTools = True
                               , pgTabs = tabs
@@ -426,6 +453,7 @@ view mbrev page = do
                           "Atom link for this page"
                        [whamlet|
                          <h1 .title>#{page}
+                         <div id="TOC">^{toc}
                          $maybe rev <- mbrev
                            <h2 .revision>#{rev}
                          ^{contw}
@@ -1281,22 +1309,61 @@ cacheContent path (TypedContent ct content) = do
               -- TODO replace w logging
               putStrLn $ "Can't cache " ++ path
 
-tryCache :: FilePath -> GH master ()
-tryCache path = do
+cacheLBS :: FilePath -> ByteString -> GH master ()
+cacheLBS cachepath lbs = do
   conf <- getConfig
-  when (use_cache conf) $
-     do
+  when (use_cache conf) $ liftIO $ do
+                          let fullpath = cache_dir conf </> cachepath
+                          createDirectoryIfMissing True $ takeDirectory fullpath
+                          B.writeFile fullpath lbs
+
+tryPageCache :: FilePath -> GH master (Maybe Html)
+tryPageCache  = processDirCache
+                (\ fullpath x -> do
+                   pageString <- liftIO $ TIO.readFile $ fullpath </> x
+                   return $ Just $ preEscapedToHtml pageString)
+
+tryTocCache :: FilePath -> GH master (Maybe [Element])
+tryTocCache = processDirCache
+                (\ fullpath x -> liftIO $
+                     withFile (fullpath </> x) ReadMode $ \hnd -> do
+                       pageString <- hGetContents hnd
+                       return $ A.decode pageString)
+
+tryCatCache :: FilePath -> GH master (Maybe [Text])
+tryCatCache = processDirCache
+                 (\ fullpath x -> liftIO $
+                     withFile (fullpath </> x) ReadMode $ \hnd -> do
+                       pageString <- BS.hGetContents hnd
+                       -- TODO: simplify
+                       return $ Just $ map T.pack $ read $ show pageString)
+
+tryCache :: FilePath -> GH master ()
+tryCache = void .
+           processDirCache
+           (\ fullpath x -> do
+              let ct = BSU.fromString $ urlDecode x
+              sendFile ct $ fullpath </> x
+              return Nothing)
+
+processDirCache :: (FilePath ->FilePath -> GH master (Maybe a))
+                -> FilePath
+                -> GH master (Maybe a)
+processDirCache process path = do
+  conf <- getConfig
+  if use_cache conf
+     then do
        let fullpath = cache_dir conf </> path
        exists <- liftIO $ doesDirectoryExist fullpath
-       when exists $
-          do
+       if exists
+          then (do
             files <- liftIO $ getDirectoryContents fullpath >>=
                                filterM (doesFileExist . (fullpath </>))
             case files of
-                 (x:_) -> do
-                    let ct = BSU.fromString $ urlDecode x
-                    sendFile ct $ fullpath </> x
-                 _     -> return ()
+                 (x:_) -> process fullpath x
+                 _     -> return Nothing)
+           else return Nothing
+     else return Nothing
 
 expireCache :: FilePath -> GH master ()
 expireCache path = do
@@ -1421,6 +1488,3 @@ hGetLinesTill h end = do
      else do
        rest <- hGetLinesTill h end
        return (next:rest)
-
-
-

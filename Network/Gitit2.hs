@@ -1,6 +1,7 @@
 {-# LANGUAGE TypeFamilies, QuasiQuotes, MultiParamTypeClasses,
              TemplateHaskell, OverloadedStrings, FlexibleInstances,
-             FlexibleContexts, ScopedTypeVariables, TupleSections #-}
+             FlexibleContexts, ScopedTypeVariables, TupleSections,
+             DeriveDataTypeable, DeriveGeneric #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.Gitit2 ( GititConfig (..)
                       , HtmlMathMethod (..)
@@ -30,14 +31,13 @@ import Data.Char (toLower)
 import System.FilePath
 import Data.List (inits, find, sortBy, isPrefixOf, sort, nub, intercalate)
 import Text.Pandoc
-import Text.Pandoc.Writers.HTML (tableOfContents, defaultWriterState)
+import qualified Text.Pandoc.Writers.HTML as PWH (defaultWriterState, WriterState)
 import Text.Pandoc.Writers.RTF (writeRTFWithEmbeddedImages)
 import Text.Pandoc.PDF (makePDF)
-import Text.Pandoc.Shared (stringify, inDirectory, readDataFileUTF8, Element, hierarchicalize)
+import Text.Pandoc.Shared (stringify, inDirectory, readDataFileUTF8, hierarchicalize)
 import Text.Pandoc.SelfContained (makeSelfContained)
 import Text.Pandoc.Builder (toList, text)
 import Control.Applicative
-import Control.Monad (when, unless, filterM, mplus, foldM)
 import Control.Monad.State
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -54,7 +54,7 @@ import Text.Blaze.Html hiding (contents)
 import Blaze.ByteString.Builder (toLazyByteString)
 import Text.HTML.SanitizeXSS (sanitizeAttribute)
 import Data.Monoid (Monoid, mappend)
-import Data.Maybe (fromMaybe, mapMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, mapMaybe, isJust)
 import System.Random (randomRIO)
 import System.IO (Handle, withFile, IOMode(..))
 import System.IO.Error (isEOFError)
@@ -69,8 +69,8 @@ import Network.HTTP.Base (urlEncode, urlDecode)
 import qualified Data.Set as Set
 
 import Network.Gitit2.Routes
-import qualified Data.Aeson as A
-import Data.Text.Lazy.Encoding
+import qualified Data.Aeson as ASON
+import Network.Gitit2.GititToc as TOC
 
 -- This is defined in GHC 7.04+, but for compatibility we define it here.
 infixr 5 <>
@@ -365,14 +365,7 @@ postDeleteR page = do
 getViewR :: HasGitit master => Page -> GH master Html
 getViewR page = do
   pathForFile page >>= tryCache
--- reorganize code
-  mbTocAndPageHtml <- do
-    mbPageHtml <- pathForPage page >>= tryPageCache
-    mbTocPandoc <- pathForToc page >>= tryTocCache
-    mbCatTexts <- pathForCatgories page >>= tryCatCache
-    return $ (,,) <$>  mbTocPandoc <*> mbCatTexts <*> mbPageHtml
-  -- tryCache for toc and toc of subpages
-  view Nothing mbTocAndPageHtml page
+  view Nothing page
 
 postPreviewR :: HasGitit master => GH master Html
 postPreviewR =
@@ -388,33 +381,49 @@ getMimeType fp = do
          $ M.lookup (drop 1 $ takeExtension fp) mimeTypes
 
 getRevisionR :: HasGitit master => RevisionId -> Page -> GH master Html
-getRevisionR rev = view (Just rev) Nothing
+getRevisionR rev = view (Just rev)
 
-view :: HasGitit master => Maybe RevisionId -> Maybe ([Element], [Text], Html) -> Page -> GH master Html
-view mbrev mbTocAndPageHtml page = do
-  path <- pathForPage page
+wikifyAndCache :: HasGitit master
+               => Page
+               -> Maybe RevisionId
+               -> GH master (Maybe ([GititToc], [Text], Html))
+wikifyAndCache page mbrev = do
+  pagePath  <- pathForPage page
   tocPath <- pathForToc page
   catPath <- pathForCatgories page
-  mbcont <- getRawContents path mbrev
-  case mbcont of
-       Just contents -> do
-         -- TODO: store toc of page
+  mbTocAndPageHtml <- do
+    mbPageHtml <- tryPageCache pagePath
+    mbTocPandoc <- tryTocCache tocPath
+    mbCatTexts <- tryCatCache catPath
+    return $ (,,) <$>  mbTocPandoc <*> mbCatTexts <*> mbPageHtml
+  maybe (do
+            mbcont <- getRawContents pagePath mbrev
+            case mbcont of
+              Just contents -> do
+                          wikipage <- contentsToWikiPage page contents
+                          htmlContents <- caching pagePath $ pageToHtml wikipage
+                          let tocHierarchy = wpTocHierarchy wikipage
+                              categories = wpCategories wikipage
+                          cacheLBS tocPath $ ASON.encode tocHierarchy
+                          cacheLBS catPath $ pack $ read $ show categories
+                          return $ Just (tocHierarchy, categories, htmlContents)
+              Nothing -> return Nothing)
+      (return . Just)
+      mbTocAndPageHtml
 
-         (tocHierarchy, categories, htmlContents) <-
-             maybe (do wikipage <- contentsToWikiPage page contents
-                       htmlContents <- caching path $ pageToHtml wikipage
-                       let tocHierarchy = wpTocHierarchy wikipage
-                           categories = wpCategories wikipage
-                       cacheLBS tocPath $ A.encode tocHierarchy
-                       cacheLBS catPath $ pack $ read $ show categories
-                       return (tocHierarchy, categories, htmlContents))
-             return
-             mbTocAndPageHtml
-         layout [ViewTab,EditTab,HistoryTab,DiscussTab]
+view :: HasGitit master
+     => Maybe RevisionId
+     -> Page
+     -> GH master Html
+view mbrev page = do
+  mbTocAndPageHtml <- wikifyAndCache page mbrev
+  case mbTocAndPageHtml of
+    Just (tocHierarchy, categories, htmlContents) ->
+             layout [ViewTab,EditTab,HistoryTab,DiscussTab]
                             tocHierarchy
                             categories
                             htmlContents
-       Nothing -> do
+    Nothing -> do
          path' <- pathForFile page
          mbcont' <- getRawContents path' mbrev
          is_source <- isSourceFile path'
@@ -433,7 +442,7 @@ view mbrev mbTocAndPageHtml page = do
    where layout tabs tocHierarchy categories cont = do
            toMaster <- getRouteToParent
            contw <- toWikiPage cont
-           toc <- extractToc tocHierarchy
+           toc <- extractTocToc tocHierarchy
            makePage pageLayout{ pgName = Just page
                               , pgPageTools = True
                               , pgTabs = tabs
@@ -468,15 +477,21 @@ view mbrev mbTocAndPageHtml page = do
                        --               ^{toc}
                        -- |]
 
-extractToc :: HasGitit master => [Element] -> GH master (WidgetT master IO ())
-extractToc tocHierrarchy = do
-   Just tocRendered <- return $ evalState (tableOfContents def{
+extractTocAbs :: HasGitit master
+              => (WriterOptions -> [a] -> State PWH.WriterState (Maybe Html))
+              -> [a]
+              -> GH master (WidgetT master IO ())
+extractTocAbs tocFun tocHierrarchy = do
+  Just tocRendered <- return $ evalState (tocFun def{
                writerWrapText = False
              , writerHtml5 = True
              , writerHighlight = True
              , writerHTMLMathMethod = MathML Nothing
-             }  tocHierrarchy) defaultWriterState
-   return $ toWidget tocRendered
+             }  tocHierrarchy) PWH.defaultWriterState
+  return $ toWidget tocRendered
+
+extractTocToc :: HasGitit master => [GititToc] -> GH master (WidgetT master IO ())
+extractTocToc = extractTocAbs TOC.tableOfContents
 
 getIndexBaseR :: HasGitit master => GH master Html
 getIndexBaseR = getIndexFor []
@@ -584,7 +599,7 @@ contentsToWikiPage page contents = do
       pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
   -- TODO: parse and fetch toc of subpages (beware of cycle)
   Pandoc _ blocks <- sanitizePandoc <$> addWikiLinks (pageToPrefix page) doc
-  let tocHierarchy = hierarchicalize blocks
+  let tocHierarchy = stripElementsForToc $ hierarchicalize blocks
   foldM applyPlugin
            WikiPage {
              wpName        = pageToText page
@@ -1323,12 +1338,12 @@ tryPageCache  = processDirCache
                    pageString <- liftIO $ TIO.readFile $ fullpath </> x
                    return $ Just $ preEscapedToHtml pageString)
 
-tryTocCache :: FilePath -> GH master (Maybe [Element])
+tryTocCache :: FilePath -> GH master (Maybe [TOC.GititToc])
 tryTocCache = processDirCache
                 (\ fullpath x -> liftIO $
                      withFile (fullpath </> x) ReadMode $ \hnd -> do
                        pageString <- hGetContents hnd
-                       return $ A.decode pageString)
+                       return $ ASON.decode pageString)
 
 tryCatCache :: FilePath -> GH master (Maybe [Text])
 tryCatCache = processDirCache

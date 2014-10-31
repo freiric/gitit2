@@ -1,4 +1,4 @@
-_ TODO 
+_ TODO
   _ TOC including subTOC for internal links
     _ process toc separately (need additional functions from pandoc to be exported)
       _ hierarchicalize from Pandoc
@@ -6,6 +6,7 @@ _ TODO
       _ needs a JSON instance for [Element] (preferrably in Pandoc)
       _ this means deserializing to HTML, preEscapedText
     _ process the page and linked page recursively to get the cache of toc of linked page, aggregate the toc and write it to html, cycle detection
+      _
     _ additional steps:
       _ optimization: processing of all page before they are accessed
       _ script the export of linked page as subsections

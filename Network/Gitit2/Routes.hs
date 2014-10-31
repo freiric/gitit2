@@ -13,9 +13,10 @@ import qualified Data.Text as T
 import Data.Text (Text)
 import Text.Blaze.Html hiding (contents)
 import Text.Pandoc (Inline, Block)
-import Text.Pandoc.Shared (Element)
 import Yesod hiding (MsgDelete)
 import Yesod.Static
+
+import Network.Gitit2.GititToc
 
 -- Create GititMessages.
 mkMessage "Gitit" "messages" "en"
@@ -164,7 +165,7 @@ data WikiPage = WikiPage {
   , wpMetadata    :: M.Map Text Value
   , wpCacheable   :: Bool
   , wpContent     :: [Block]
-  , wpTocHierarchy :: [Element]
+  , wpTocHierarchy :: [GititToc]
 } deriving (Show)
 
 -- Create routes.

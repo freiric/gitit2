@@ -13,16 +13,12 @@ import Control.Applicative
 import Text.Pandoc
 import qualified Text.Pandoc.UTF8 as UTF8
 import System.FilePath ((<.>), (</>))
-import Control.Monad (when, unless)
-import System.Directory (removeDirectoryRecursive, doesDirectoryExist)
-import qualified Data.ByteString.Char8 as B
-import qualified Data.Map as M
+import Control.Monad (unless)
+import System.Directory (doesDirectoryExist)
 import System.IO
-import System.Exit
 import Data.Text (Text)
 import qualified Data.Text as T
 import Prelude
-import Control.Exception (catch, SomeException)
 import qualified Data.Set as Set
 import Paths_gitit2 (getDataFileName)
 import qualified Network.HTTP.Conduit as HC

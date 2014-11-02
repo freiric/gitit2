@@ -19,7 +19,7 @@ module Config (
               , clientId
               , clientSecret
 )
-where 
+where
 import System.Environment
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -57,7 +57,7 @@ data Conf = Conf { cfg_port             :: Int
                  , cfg_max_upload_size  :: String
                  , cfg_latex_engine     :: Maybe FilePath
                  , cfg_auth_github      :: Maybe GitHub
-                 }    
+                 }
 
 data GitHub =  GitHub {
       clientId :: Text
@@ -70,12 +70,12 @@ data FoundationSettings  = FoundationSettings {
 } deriving (Show)
 
 foundationSettingsFromConf :: Conf -> FoundationSettings
-foundationSettingsFromConf conf = 
+foundationSettingsFromConf conf =
     FoundationSettings (cfg_auth_github conf) (cfg_approot conf)
-                           
+
 
 instance FromJSON GitHub where
-    parseJSON (Object o) = GitHub 
+    parseJSON (Object o) = GitHub
                            <$> o .: "clientId"
                            <*> o .: "clientSecret"
     parseJSON _          = mzero
@@ -83,11 +83,11 @@ instance FromJSON GitHub where
 parseElem :: FromJSON a => [Object] -> Text -> Parser (Maybe a)
 parseElem os text = foldr f (return Nothing) os
     where
-      f o pm = do 
+      f o pm = do
         maybeParsedO <- o .:? text
         case maybeParsedO of
           Nothing -> pm
-          _ -> return maybeParsedO        
+          _ -> return maybeParsedO
 
 parseConfig :: [Object] -> Parser Conf
 parseConfig os = Conf
@@ -168,7 +168,10 @@ gititConfigFromConf conf = do
     let cachedir = cfg_cache_dir conf
     exists <- doesDirectoryExist cachedir
     when exists $ removeDirectoryRecursive cachedir
-
+  let gCacheConfig = GititCacheConfig { use_cache = cfg_use_cache conf
+                                      , cache_dir = cfg_cache_dir conf
+                                      , feed_minutes  = cfg_feed_minutes conf
+                                      }
   let gconfig = GititConfig{ mime_types = mimes
                            , default_format = format
                            , repository_path = cfg_repository_path conf
@@ -176,12 +179,10 @@ gititConfigFromConf conf = do
                            , static_path = cfg_static_dir conf
                            , use_mathjax = cfg_use_mathjax conf
                            , feed_days  = cfg_feed_days conf
-                           , feed_minutes  = cfg_feed_minutes conf
                            , pandoc_user_data = cfg_pandoc_user_data conf
-                           , use_cache = cfg_use_cache conf
-                           , cache_dir = cfg_cache_dir conf
                            , front_page = cfg_front_page conf
                            , help_page = cfg_help_page conf
                            , latex_engine = cfg_latex_engine conf
+                           , gitit_cache_conf = gCacheConfig
                            }
   return gconfig

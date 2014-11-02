@@ -16,6 +16,7 @@ import Text.Pandoc (Inline, Block)
 import Yesod hiding (MsgDelete)
 import Yesod.Static
 
+import Control.Monad.Reader
 import Network.Gitit2.GititToc
 
 -- Create GititMessages.
@@ -63,14 +64,21 @@ data GititConfig = GititConfig{
      , static_path      :: FilePath                 -- ^ Path of static dir
      , use_mathjax      :: Bool                     -- ^ Link to mathjax script
      , feed_days        :: Integer                  -- ^ Days back for feed entries
-     , feed_minutes     :: Integer                  -- ^ Minutes to cache feed before refresh
      , pandoc_user_data :: Maybe FilePath           -- ^ Pandoc userdata directory
-     , use_cache        :: Bool                     -- ^ Cache pages and files
-     , cache_dir        :: FilePath                 -- ^ Path to cache
      , front_page       :: Text                     -- ^ Front page of wiki
      , help_page        :: Text                     -- ^ Help page
      , latex_engine     :: Maybe FilePath           -- ^ LaTeX engine to use for PDF export
+     , gitit_cache_conf :: GititCacheConfig
      }
+
+type GCacheConf m a = ReaderT GititCacheConfig m a
+
+data GititCacheConfig =  GititCacheConfig {
+      use_cache        :: Bool                     -- ^ Cache pages and files
+    , cache_dir        :: FilePath                 -- ^ Path to cache
+    , feed_minutes     :: Integer                  -- ^ Minutes to cache feed before refresh
+}
+
 
 -- | Path to a wiki page.  Page and page components can't begin with '_'.
 data Page = Page [Text] deriving (Show, Read, Eq)

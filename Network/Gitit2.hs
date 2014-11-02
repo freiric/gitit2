@@ -4,6 +4,7 @@
              DeriveDataTypeable, DeriveGeneric #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.Gitit2 ( GititConfig (..)
+                      , GititCacheConfig (..)
                       , HtmlMathMethod (..)
                       , Page (..)
                       , PageFormat (..)
@@ -71,6 +72,7 @@ import qualified Data.Set as Set
 import Network.Gitit2.Routes
 import qualified Data.Aeson as ASON
 import Network.Gitit2.GititToc as TOC
+import Control.Monad.Reader (ask, runReaderT)
 
 -- This is defined in GHC 7.04+, but for compatibility we define it here.
 infixr 5 <>
@@ -364,7 +366,7 @@ postDeleteR page = do
 
 getViewR :: HasGitit master => Page -> GH master Html
 getViewR page = do
-  pathForFile page >>= tryCache
+  pathForFile page >>= runWithCacheConf . tryCache
   view Nothing page
 
 postPreviewR :: HasGitit master => GH master Html
@@ -392,20 +394,20 @@ wikifyAndCache page mbrev = do
   tocPath <- pathForToc page
   catPath <- pathForCatgories page
   mbTocAndPageHtml <- do
-    mbPageHtml <- tryPageCache pagePath
-    mbTocPandoc <- tryTocCache tocPath
-    mbCatTexts <- tryCatCache catPath
+    mbPageHtml <- runWithCacheConf $ tryPageCache pagePath
+    mbTocPandoc <- runWithCacheConf $ tryTocCache tocPath
+    mbCatTexts <- runWithCacheConf $ tryCatCache catPath
     return $ (,,) <$>  mbTocPandoc <*> mbCatTexts <*> mbPageHtml
   maybe (do
             mbcont <- getRawContents pagePath mbrev
             case mbcont of
               Just contents -> do
                           wikipage <- contentsToWikiPage page contents
-                          htmlContents <- caching pagePath $ pageToHtml wikipage
+                          htmlContents <- runWithCacheConf $ caching pagePath $ pageToHtml wikipage
                           let tocHierarchy = wpTocHierarchy wikipage
                               categories = wpCategories wikipage
-                          cacheLBS tocPath $ ASON.encode tocHierarchy
-                          cacheLBS catPath $ pack $ read $ show categories
+                          runWithCacheConf $ cacheLBS tocPath $ ASON.encode tocHierarchy
+                          runWithCacheConf $ cacheLBS catPath $ pack $ read $ show categories
                           return $ Just (tocHierarchy, categories, htmlContents)
               Nothing -> return Nothing)
       (return . Just)
@@ -434,11 +436,11 @@ view mbrev page = do
               Just contents
                | is_source -> do
                    htmlContents <- sourceToHtml path' contents
-                   caching path' $ layout [ViewTab,HistoryTab] [] [] htmlContents
+                   runWithCacheConf $ caching path' $ layout [ViewTab,HistoryTab] [] [] htmlContents
                | otherwise -> do
                   ct <- getMimeType path'
                   let content = toContent contents
-                  caching path' (return (ct, content)) >>= sendResponse
+                  runWithCacheConf $ caching path' (return (ct, content)) >>= sendResponse
    where layout tabs tocHierarchy categories cont = do
            toMaster <- getRouteToParent
            contw <- toWikiPage cont
@@ -816,14 +818,14 @@ update' mbrevid page = do
               mres <- liftIO $ FS.modify fs path revid auth comm cont
               case mres of
                    Right () -> do
-                      expireCache path
+                      runWithCacheConf $ expireCache path
                       redirect $ ViewR page
                    Left mergeinfo -> do
                       setMessageI $ MsgMerged revid
                       edit False (mergeText mergeinfo)
                            (Just $ revId $ mergeRevision mergeinfo) page
            Nothing -> do
-             expireCache path
+             runWithCacheConf $ expireCache path
              liftIO $ save fs path auth comm cont
              redirect $ ViewR page
        _ -> showEditForm page route enctype widget
@@ -1009,14 +1011,14 @@ getActivityR start = do
 
 getAtomSiteR :: HasGitit master => GH master RepAtom
 getAtomSiteR = do
-  tryCache "_feed"
-  caching "_feed" $ feed Nothing >>= atomFeed
+  runWithCacheConf $ tryCache "_feed"
+  runWithCacheConf $ caching "_feed" $ feed Nothing >>= atomFeed
 
 getAtomPageR :: HasGitit master => Page -> GH master RepAtom
 getAtomPageR page = do
   path <- pathForPage page
-  tryCache (path </> "_feed")
-  caching (path </> "_feed") $ feed (Just page) >>= atomFeed
+  runWithCacheConf $ tryCache (path </> "_feed")
+  runWithCacheConf $ caching (path </> "_feed") $ feed (Just page) >>= atomFeed
 
 feed :: HasGitit master
      => Maybe Page  -- page, or nothing for all
@@ -1077,12 +1079,12 @@ getExportR format page = do
            path <- pathForPage page
            -- set filename here so it works for cached page
            setFilename $ pageToText page <> extension
-           tryCache $ path </> T.unpack format
+           runWithCacheConf $ tryCache $ path </> T.unpack format
            mbcont <- getRawContents path Nothing
            case mbcont of
                 Nothing   -> fail "Could not get page contents"
                 Just cont -> contentsToWikiPage page cont >>=
-                               caching (path </> T.unpack format) . f >>=
+                               runWithCacheConf . caching (path </> T.unpack format) . f >>=
                                sendResponse
 
 -- TODO:
@@ -1274,7 +1276,7 @@ postUploadR = do
                                         showUploadForm enctype widget
                    Left e            -> throw e
                    Right _           -> do
-                                        expireCache path
+                                        runWithCacheConf $ expireCache path
                                         redirect $ ViewR page
        _             -> showUploadForm enctype widget
 
@@ -1286,6 +1288,7 @@ postUploadR = do
 -- expires all of them.  Non-pages Foo.jpg just get cached as Foo.jpg.
 ----------
 
+
 postExpireHomeR :: HasGitit master => GH master Html
 postExpireHomeR = do
   conf <- getConfig
@@ -1293,59 +1296,63 @@ postExpireHomeR = do
 
 postExpireR :: HasGitit master => Page -> GH master Html
 postExpireR page = do
-  useCache <- use_cache <$> getConfig
+  useCache <- use_cache . gitit_cache_conf <$> getConfig
   when useCache $
      do
-       pathForPage page >>= expireCache
-       pathForFile page >>= expireCache
+       pathForPage page >>= runWithCacheConf . expireCache
+       pathForFile page >>= runWithCacheConf . expireCache
   redirect $ ViewR page
 
-caching :: ToTypedContent a
-        => FilePath -> GH master a -> GH master a
+caching :: (ToTypedContent a, MonadIO m)
+        => FilePath -> m a -> GCacheConf m a
 caching path handler = do
-  conf <- getConfig
-  if use_cache conf
+  useCache <- liftM use_cache ask
+  if useCache
      then do
-       result <- handler
+       result <- lift handler
        cacheContent path $ toTypedContent result
        return result
-     else handler
+     else lift handler
 
-cacheContent :: FilePath -> TypedContent -> GH master ()
+cacheContent :: MonadIO m => FilePath -> TypedContent -> GCacheConf m ()
 cacheContent path (TypedContent ct content) = do
-  conf <- getConfig
-  when (use_cache conf) $
+  useCache <- liftM use_cache ask
+  when useCache $
        case content of
-            ContentBuilder builder _ -> liftIO $ do
-              let fullpath = cache_dir conf </> path </> urlEncode (BSU.toString ct)
-              createDirectoryIfMissing True $ takeDirectory fullpath
-              B.writeFile fullpath $ toLazyByteString builder
+            ContentBuilder builder _ -> do
+              cacheDir <- liftM cache_dir ask
+              liftIO $ do
+                      let fullpath = cacheDir </> path </> urlEncode (BSU.toString ct)
+                      createDirectoryIfMissing True $ takeDirectory fullpath
+                      B.writeFile fullpath $ toLazyByteString builder
             _ -> liftIO $
               -- TODO replace w logging
               putStrLn $ "Can't cache " ++ path
 
-cacheLBS :: FilePath -> ByteString -> GH master ()
+cacheLBS :: MonadIO m => FilePath -> ByteString -> GCacheConf m ()
 cacheLBS cachepath lbs = do
-  conf <- getConfig
-  when (use_cache conf) $ liftIO $ do
-                          let fullpath = cache_dir conf </> cachepath
-                          createDirectoryIfMissing True $ takeDirectory fullpath
-                          B.writeFile fullpath lbs
+  useCache <- liftM use_cache ask
+  when useCache $ do
+    cacheDir <- liftM cache_dir ask
+    liftIO $ do
+         let fullpath = cacheDir </> cachepath
+         createDirectoryIfMissing True $ takeDirectory fullpath
+         B.writeFile fullpath lbs
 
-tryPageCache :: FilePath -> GH master (Maybe Html)
+tryPageCache :: MonadIO m => FilePath -> GCacheConf m (Maybe Html)
 tryPageCache  = processDirCache
                 (\ fullpath x -> do
                    pageString <- liftIO $ TIO.readFile $ fullpath </> x
                    return $ Just $ preEscapedToHtml pageString)
 
-tryTocCache :: FilePath -> GH master (Maybe [TOC.GititToc])
+tryTocCache :: MonadIO m => FilePath -> GCacheConf m (Maybe [TOC.GititToc])
 tryTocCache = processDirCache
                 (\ fullpath x -> liftIO $
                      withFile (fullpath </> x) ReadMode $ \hnd -> do
                        pageString <- hGetContents hnd
                        return $ ASON.decode pageString)
 
-tryCatCache :: FilePath -> GH master (Maybe [Text])
+tryCatCache :: MonadIO m => FilePath -> GCacheConf m (Maybe [Text])
 tryCatCache = processDirCache
                  (\ fullpath x -> liftIO $
                      withFile (fullpath </> x) ReadMode $ \hnd -> do
@@ -1353,22 +1360,24 @@ tryCatCache = processDirCache
                        -- TODO: simplify
                        return $ Just $ map T.pack $ read $ show pageString)
 
-tryCache :: FilePath -> GH master ()
-tryCache = void .
+tryCache :: (MonadIO m, MonadResource m, MonadHandler m) => FilePath -> GCacheConf m ()
+tryCache = unwrapMonad . void . WrapMonad .
            processDirCache
            (\ fullpath x -> do
               let ct = BSU.fromString $ urlDecode x
               sendFile ct $ fullpath </> x
               return Nothing)
 
-processDirCache :: (FilePath ->FilePath -> GH master (Maybe a))
+processDirCache :: MonadIO m
+                => (FilePath ->FilePath -> GCacheConf m (Maybe a))
                 -> FilePath
-                -> GH master (Maybe a)
+                -> GCacheConf m (Maybe a)
 processDirCache process path = do
-  conf <- getConfig
-  if use_cache conf
+  useCache <- liftM use_cache ask
+  if useCache
      then do
-       let fullpath = cache_dir conf </> path
+       cacheDir <- liftM cache_dir ask
+       let fullpath = cacheDir </> path
        exists <- liftIO $ doesDirectoryExist fullpath
        if exists
           then (do
@@ -1380,30 +1389,30 @@ processDirCache process path = do
            else return Nothing
      else return Nothing
 
-expireCache :: FilePath -> GH master ()
+expireCache :: MonadIO m => FilePath -> GCacheConf m ()
 expireCache path = do
-  conf <- getConfig
-  expireFeed (feed_minutes conf) (path </> "_feed")
-  expireFeed (feed_minutes conf) "_feed"
+  feedMinutes <- liftM feed_minutes ask
+  expireFeed feedMinutes (path </> "_feed")
+  expireFeed feedMinutes "_feed"
   expireCategories
-  cachedir <- cache_dir <$> getConfig
+  cachedir <- liftM cache_dir ask
   let fullpath = cachedir </> path
   liftIO $ do
     exists <- doesDirectoryExist fullpath
     when exists $ removeDirectoryRecursive fullpath
 
-expireCategories :: GH master ()
+expireCategories :: MonadIO m => GCacheConf m ()
 expireCategories = do
-  cachedir <- cache_dir <$> getConfig
+  cachedir <- liftM cache_dir ask
   let fullpath = cachedir </> "_categories"
   liftIO $ do
     exists <- doesDirectoryExist fullpath
     when exists $ removeDirectoryRecursive fullpath
 
 -- | Expire the cached feed unless it is younger than 'minutes' old.
-expireFeed :: Integer -> FilePath -> GH master ()
+expireFeed :: MonadIO m => Integer -> FilePath -> GCacheConf m ()
 expireFeed minutes path = do
-  cachedir <- cache_dir <$> getConfig
+  cachedir <- liftM cache_dir ask
   let fullpath = cachedir </> path
   liftIO $ do
     exists <- doesDirectoryExist fullpath
@@ -1413,6 +1422,14 @@ expireFeed minutes path = do
       unless (diffUTCTime seconds' seconds < realToFrac (minutes * 60))
         $ removeDirectoryRecursive fullpath
 
+runWithCacheConf :: HasGitit master
+                 => GCacheConf (GH master) a
+                 -> GH master a
+runWithCacheConf reader = do
+  conf <- getConfig
+  runReaderT reader (gitit_cache_conf conf)
+
+
 -- categories ------------
 
 -- NOTE:  The current implementation of of categories does not go via the
@@ -1421,13 +1438,13 @@ expireFeed minutes path = do
 
 getCategoriesR :: HasGitit master => GH master Html
 getCategoriesR = do
-  tryCache "_categories"
+  runWithCacheConf $ tryCache "_categories"
   conf <- getConfig
   toMaster <- getRouteToParent
   let repopath = repository_path conf
   allpages <- map (repopath </>) <$> allPageFiles
   allcategories <- liftIO $ nub . sort . concat <$> mapM readCategories allpages
-  caching "_categories" $
+  runWithCacheConf $ caching "_categories" $
     makePage pageLayout{ pgName = Nothing
                        , pgTabs = []
                        , pgSelectedTab = EditTab }
@@ -1441,14 +1458,14 @@ getCategoriesR = do
 getCategoryR :: HasGitit master => Text -> GH master Html
 getCategoryR category = do
   let cachepage = "_categories" </> T.unpack category
-  tryCache cachepage
+  runWithCacheConf $ tryCache cachepage
   conf <- getConfig
   toMaster <- getRouteToParent
   let repopath = repository_path conf
   allpages <- allPageFiles
   let hasCategory pg = elem category <$> readCategories (repopath </> pg)
   matchingpages <- mapM pageForPath =<< (sort <$> filterM (liftIO . hasCategory) allpages)
-  caching cachepage $
+  runWithCacheConf $ caching cachepage $
     makePage pageLayout{ pgName = Nothing
                        , pgTabs = []
                        , pgSelectedTab = EditTab }

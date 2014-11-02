@@ -221,18 +221,27 @@ sanitizePandoc = bottomUp sanitizeBlock . bottomUp sanitizeInline
 pathForPage :: Page -> GH master FilePath
 pathForPage p = do
   conf <- getConfig
-  return $ T.unpack (toMessage p) <> page_extension conf
+  return $ pathFor p Content (page_extension conf)
 
 pathForToc :: Page -> GH master FilePath
 pathForToc p = do
   conf <- getConfig
-  return $ T.unpack (toMessage p) <> page_extension conf </> "toc"
+  return $ pathFor p TableOfContent (page_extension conf)
 
 pathForCatgories :: Page -> GH master FilePath
 pathForCatgories p = do
   conf <- getConfig
-  return $ T.unpack (toMessage p) <> page_extension conf </> "categories"
+  return $ pathFor p Categories (page_extension conf)
 
+data CacheableElt = Categories | TableOfContent | Content
+
+pathFor :: Page -> CacheableElt -> String -> String
+pathFor p cachableElt pageExtension =
+    let basePath =  T.unpack (toMessage p) <> pageExtension
+    in case cachableElt of
+         Categories -> basePath </> "categories"
+         TableOfContent -> basePath </> "toc"
+         Content -> basePath
 
 pathForFile :: Page -> GH master FilePath
 pathForFile p = return $ T.unpack $ toMessage p

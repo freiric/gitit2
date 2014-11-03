@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE DeriveDataTypeable, DeriveGeneric #-}
 module Network.Gitit2.Routes where
 
 import Data.FileStore (FileStore, RevisionId)
@@ -15,15 +16,21 @@ import Text.Blaze.Html hiding (contents)
 import Text.Pandoc (Inline, Block)
 import Yesod hiding (MsgDelete)
 import Yesod.Static
-
+import Data.Typeable
+import Data.Data
+import GHC.Generics
+import Text.Pandoc
 import Control.Monad.Reader
-import Network.Gitit2.GititToc
+
+--import Network.Gitit2.GititToc
 
 -- Create GititMessages.
 mkMessage "Gitit" "messages" "en"
 
 type GH master = HandlerT Gitit (HandlerT master IO)
 type GW master = WidgetT Gitit (HandlerT master IO)
+
+type GHT master m = HandlerT Gitit (HandlerT master m)
 
 data Plugin master = Plugin {
        unPlugin :: WikiPage -> GH master WikiPage
@@ -162,6 +169,13 @@ readPageFormat s =
        _           -> Nothing
  where (s',rest) = T.break (=='+') s
        lhs = rest == "+lhs"
+
+
+-- data type equivalent to Element where only links inside blocks have been kept
+data GititToc = GititLink [Inline] Target
+              | GititSec Int [Int] Text.Pandoc.Attr [Inline] [GititToc]
+                --    lvl  num attributes label    contents
+                deriving (Eq, Read, Show, Typeable, Data, Generic)
 
 data WikiPage = WikiPage {
     wpName        :: Text

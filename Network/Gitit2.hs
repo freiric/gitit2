@@ -54,8 +54,8 @@ import Data.Conduit.List (consume)
 import Text.Blaze.Html hiding (contents)
 import Blaze.ByteString.Builder (toLazyByteString)
 import Text.HTML.SanitizeXSS (sanitizeAttribute)
-import Data.Monoid (Monoid, mappend)
-import Data.Maybe (fromMaybe, mapMaybe, isJust)
+import Data.Monoid (Monoid, mempty, mappend)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe, isJust)
 import System.Random (randomRIO)
 import System.IO (Handle, withFile, IOMode(..))
 import System.IO.Error (isEOFError)
@@ -73,6 +73,10 @@ import Network.Gitit2.Routes
 import qualified Data.Aeson as ASON
 import Network.Gitit2.GititToc as TOC
 import Control.Monad.Reader (ask, runReaderT)
+import qualified Text.Pandoc.Writers.HTML as PWH (WriterState, inlineListToHtml, unordList)
+import qualified Text.Blaze.XHtml1.Transitional as H
+import qualified Text.Blaze.XHtml1.Transitional.Attributes as A
+import Network.URI ( unEscapeString )
 
 -- This is defined in GHC 7.04+, but for compatibility we define it here.
 infixr 5 <>
@@ -399,6 +403,7 @@ wikifyAndCache :: HasGitit master
                -> Maybe RevisionId
                -> GH master (Maybe ([GititToc], [Text], Html))
 wikifyAndCache page mbrev = do
+  liftIO $ print page
   pagePath  <- pathForPage page
   tocPath <- pathForToc page
   catPath <- pathForCatgories page
@@ -453,7 +458,7 @@ view mbrev page = do
    where layout tabs tocHierarchy categories cont = do
            toMaster <- getRouteToParent
            contw <- toWikiPage cont
-           toc <- extractTocToc tocHierarchy
+           mbToc <- extractTocToc tocHierarchy
            makePage pageLayout{ pgName = Just page
                               , pgPageTools = True
                               , pgTabs = tabs
@@ -473,7 +478,8 @@ view mbrev page = do
                           "Atom link for this page"
                        [whamlet|
                          <h1 .title>#{page}
-                         <div id="TOC">^{toc}
+                         $maybe toc <- mbToc
+                           <div id="TOC">^{toc}
                          $maybe rev <- mbrev
                            <h2 .revision>#{rev}
                          ^{contw}
@@ -489,20 +495,30 @@ view mbrev page = do
                        -- |]
 
 extractTocAbs :: HasGitit master
-              => (WriterOptions -> [a] -> State PWH.WriterState (Maybe Html))
+              => (WriterOptions
+                      -> Text
+                      -> [a]
+                      -> StateT PWH.WriterState (GH master) (Maybe Html))
               -> [a]
-              -> GH master (WidgetT master IO ())
+              -> GH master (Maybe (WidgetT master IO ()))
 extractTocAbs tocFun tocHierrarchy = do
-  Just tocRendered <- return $ evalState (tocFun def{
-               writerWrapText = False
-             , writerHtml5 = True
-             , writerHighlight = True
-             , writerHTMLMathMethod = MathML Nothing
-             }  tocHierrarchy) PWH.defaultWriterState
-  return $ toWidget tocRendered
+  let tocFunS = tocFun def { writerWrapText = False
+                           , writerHtml5 = True
+                           , writerHighlight = True
+                           , writerHTMLMathMethod = MathML Nothing
+                           }
+             "" tocHierrarchy
+  mbTocRendered <- evalStateT tocFunS PWH.defaultWriterState
+  case mbTocRendered of
+    Just tocRendered -> return $ Just $ toWidget tocRendered
+    -- page has no titles and hence no toc
+    Nothing -> return Nothing
 
-extractTocToc :: HasGitit master => [GititToc] -> GH master (WidgetT master IO ())
-extractTocToc = extractTocAbs TOC.tableOfContents
+
+extractTocToc :: HasGitit master
+              => [GititToc]
+              -> GH master (Maybe (WidgetT master IO ()))
+extractTocToc = extractTocAbs tableOfContents
 
 getIndexBaseR :: HasGitit master => GH master Html
 getIndexBaseR = getIndexFor []
@@ -604,10 +620,7 @@ contentsToWikiPage page contents = do
   let fromBool (Bool t) = t
       fromBool _        = False
   let toc = maybe False fromBool (M.lookup "toc" metadata)
-  liftIO $ print $ "toc: "++ show toc
   let doc = reader $ toString b
-  let pageToPrefix (Page []) = T.empty
-      pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
   -- TODO: parse and fetch toc of subpages (beware of cycle)
   Pandoc _ blocks <- sanitizePandoc <$> addWikiLinks (pageToPrefix page) doc
   let tocHierarchy = stripElementsForToc $ hierarchicalize blocks
@@ -624,6 +637,10 @@ contentsToWikiPage page contents = do
            , wpContent     = blocks
            , wpTocHierarchy = tocHierarchy
            } plugins'
+
+pageToPrefix :: Page -> Text
+pageToPrefix (Page []) = T.empty
+pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
 
 sourceToHtml :: HasGitit master
              => FilePath -> ByteString -> GH master Html
@@ -1529,3 +1546,123 @@ hGetLinesTill h end = do
      else do
        rest <- hGetLinesTill h end
        return (next:rest)
+-- toc
+
+tableOfContentsAbs :: (WriterOptions
+                           -> Text
+                           -> a
+                           -> StateT PWH.WriterState (GH master) (Maybe Html))
+                   -> WriterOptions
+                   -> Text
+                   -> [a]
+                   -> StateT PWH.WriterState (GH master) (Maybe Html)
+tableOfContentsAbs _ _ _ [] = return Nothing
+tableOfContentsAbs writer opts prefix sects = do
+  let opts'        = opts { writerIgnoreNotes = True }
+  contents  <- mapM (writer opts' prefix) sects
+  let tocList = catMaybes contents
+  return $ if null tocList
+              then Nothing
+              else Just $ PWH.unordList opts tocList
+
+tableOfContents :: HasGitit master
+                => WriterOptions
+                -> Text
+                -> [GititToc]
+                -> StateT PWH.WriterState (GH master) (Maybe Html)
+tableOfContents = tableOfContentsAbs gititTocToListItem
+
+-- | Convert section number to string
+showSecNum :: [Int] -> String
+showSecNum = intercalate "." . map show
+
+gititTocToListItem :: HasGitit master
+                   => WriterOptions
+                   -> Text
+                   -> GititToc
+                   -> StateT PWH.WriterState (GH master) (Maybe Html)
+-- Don't include the empty headers created in slide shows
+-- shows when an hrule is used to separate slides without a new title:
+gititTocToListItem _ _ (GititSec _ _ _ [Str "\0"] _) = return Nothing
+
+gititTocToListItem opts prefix (GititSec lev num (id',classes,_) headerText subsecs)
+  | lev <= writerTOCDepth opts = do
+  let num' = zipWith (+) num (writerNumberOffset opts ++ repeat 0)
+  let sectnum = if writerNumberSections opts && not (null num) &&
+                   "unnumbered" `notElem` classes
+                   then (H.span ! A.class_ "toc-section-number"
+                        $ toHtml $ showSecNum num') >> preEscapedToHtml (" " :: String)
+                   else mempty
+-- State WriterState Html to StateT WriterState (GH master) Html
+  txt <- liftM (sectnum >>) $ PWH.inlineListToHtml opts headerText
+  subHeads <- liftM catMaybes (mapM (gititTocToListItem opts prefix) subsecs)
+  let subList = if null subHeads
+                   then mempty
+                   else PWH.unordList opts subHeads
+  -- in reveal.js, we need #/apples, not #apples:
+  let revealSlash = ['/' | writerSlideVariant opts == RevealJsSlides]
+  if null id'
+              then return $ Just $ H.a (toHtml txt) >> subList
+           -- TODO: add ref to page
+              else do
+                  toMaster <- lift getRouteToParent
+                  let route = ViewR $ textToPage $ prefix
+                  toUrl <- lift $ lift getUrlRender
+                  return $ Just $ (H.a ! A.href
+                                          (toValue $ (T.unpack $ toUrl $ toMaster route)
+                                           ++ "#" ++ revealSlash ++ writerIdentifierPrefix opts ++ id')
+                                        $ toHtml txt) >> subList
+
+gititTocToListItem opts _ (GititLink ref (s, tit)) = do
+  let target = textToPage $ T.pack $ inlinesToString ref
+  liftIO $ print target
+  linkText <- PWH.inlineListToHtml opts ref
+  let s' = case s of
+             '#':xs | writerSlideVariant opts == RevealJsSlides -> '#':'/':xs
+             _ -> s
+  let link = H.a ! A.href (toValue s') $ linkText
+      link' = if ref == [Str (unEscapeString s)]
+                 then link ! A.class_ "uri"
+                 else link
+      link'' = if null tit
+                  then link'
+                  else link' ! A.title (toValue tit)
+  mbTocAndPageHtml <- lift $ wikifyAndCache target Nothing
+  case mbTocAndPageHtml of
+    Just (tocs, _, _) -> do
+                          mbToc <- tableOfContents opts (pageToText target) tocs
+                          case mbToc of
+                            Just toc -> return $ Just $ link'' >> toc
+                            -- referred page has no toc
+                            Nothing -> return $ Just $ link''
+    -- referred page does not exist or could not be parsed
+    Nothing -> return $ Just $ link''
+
+gititTocToListItem _ _ _ = return Nothing
+
+-- stolen from gitit ContentTransfomers.hs
+-- | Convert a list of inlines into a string.
+inlinesToString :: [Inline] -> String
+inlinesToString = concatMap go
+  where go x = case x of
+               Str s                   -> s
+               Emph xs                 -> concatMap go xs
+               Strong xs               -> concatMap go xs
+               Strikeout xs            -> concatMap go xs
+               Superscript xs          -> concatMap go xs
+               Subscript xs            -> concatMap go xs
+               SmallCaps xs            -> concatMap go xs
+               Quoted DoubleQuote xs   -> '"' : (concatMap go xs ++ "\"")
+               Quoted SingleQuote xs   -> '\'' : (concatMap go xs ++ "'")
+               Cite _ xs               -> concatMap go xs
+               Code _ s                -> s
+               Space                   -> " "
+               LineBreak               -> " "
+               Math DisplayMath s      -> "$$" ++ s ++ "$$"
+               Math InlineMath s       -> "$" ++ s ++ "$"
+               RawInline (Format "tex") s -> s
+               RawInline _ _           -> ""
+               Link xs _               -> concatMap go xs
+               Image xs _              -> concatMap go xs
+               Note _                  -> ""
+               Span _ xs               -> concatMap go xs

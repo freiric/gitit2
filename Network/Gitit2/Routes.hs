@@ -74,6 +74,7 @@ data GititConfig = GititConfig{
      , front_page       :: Text                     -- ^ Front page of wiki
      , help_page        :: Text                     -- ^ Help page
      , latex_engine     :: Maybe FilePath           -- ^ LaTeX engine to use for PDF export
+     , toc_depth        :: Maybe Int                -- ^ Depth of table of contents
      }
 
 -- | Path to a wiki page.  Page and page components can't begin with '_'.
@@ -160,14 +161,13 @@ readPageFormat s =
        lhs = rest == "+lhs"
 
 -- | Data type equivalent to Element where only sections and single links in paragraph have been kept
-data GititToc = GititLink [Inline] Target
+data GititToc = GititLink Int [Inline] Target
               | GititSec Int [Int] Text.Pandoc.Attr [Inline] [GititToc]
                 --    lvl  num attributes label    contents
                 deriving (Eq, Read, Show, Typeable, Data, Generic)
 
 instance ASON.FromJSON GititToc
 instance ASON.ToJSON GititToc
-
 data WikiPage = WikiPage {
     wpName        :: Text
   , wpFormat      :: PageFormat

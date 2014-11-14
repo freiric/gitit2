@@ -162,9 +162,10 @@ readPageFormat s =
        lhs = rest == "+lhs"
 
 -- | Data type equivalent to Element where only sections and single links in paragraph have been kept
-data GititToc = GititLink Int [Inline] Target
+data GititToc = GititLink Int Text.Pandoc.Attr [Inline] Target
+                --        lvl attributes       label    link
               | GititSec Int [Int] Text.Pandoc.Attr [Inline] [GititToc]
-                --    lvl  num attributes label    contents
+                --       lvl num   attributes       label    contents
                 deriving (Eq, Read, Show, Typeable, Data, Generic)
 
 instance ASON.FromJSON GititToc

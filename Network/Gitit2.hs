@@ -42,7 +42,7 @@ import Control.Monad.State
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Text (Text)
-import Data.ByteString.Lazy (ByteString, fromChunks, pack, hGetContents)
+import Data.ByteString.Lazy (ByteString, fromChunks, pack, hGetContents, fromStrict)
 import qualified Data.ByteString.Lazy.Char8 as B
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
@@ -73,6 +73,7 @@ import qualified Data.Aeson as ASON
 import qualified Text.Blaze.XHtml1.Transitional as H
 import qualified Text.Blaze.XHtml1.Transitional.Attributes as A
 import Network.URI ( unEscapeString )
+import Data.Text.Encoding
 
 -- This is defined in GHC 7.04+, but for compatibility we define it here.
 infixr 5 <>
@@ -376,9 +377,12 @@ getViewR page = do
   pathForFile page >>= tryCache
   view Nothing page
 
-postPreviewR :: HasGitit master => GH master Html
-postPreviewR =
-  undefined -- TODO: get raw contents and settings from post params
+postPreviewR :: HasGitit master => Page -> GH master Html
+postPreviewR page = do
+  contents <- lift $ runInputPost $ ireq textField "contents"
+  wikipage <- contentsToWikiPage page (fromStrict $ encodeUtf8 contents)
+  pageToHtml wikipage
+  -- undefined -- TODO: get raw contents and settings from post params
   -- return HTML for rendered page contents
   -- a javascript gizmo will display this in a modal or something
   -- factor out some of the code from view
@@ -805,16 +809,41 @@ showEditForm :: HasGitit master
              -> Enctype
              -> WidgetT master IO ()
              -> GH master Html
-showEditForm page route enctype form =
+showEditForm page route enctype form = do
+  --toMaster <- getRouteToParent
   makePage pageLayout{ pgName = Just page
                      , pgTabs = [EditTab]
                      , pgSelectedTab = EditTab }
+  $ do
+    toWidget [julius|
+     function updatePreviewPane() {
+       var url = location.pathname.replace(/_edit\//,"_preview/");
+       $.post(
+           url,
+           {"contents" : $("#editpane").attr("value")},
+           function(data) {
+             $('#previewpane').html(data);
+             // Process any mathematics if we're using MathML
+             if (typeof(convert) == 'function') { convert(); }
+             // Process any mathematics if we're using jsMath
+             if (typeof(jsMath) == 'object')    { jsMath.ProcessBeforeShowing(); }
+             // Process any mathematics if we're using MathJax
+             if (typeof(window.MathJax) == 'object') {
+               // http://docs.mathjax.org/en/latest/typeset.html
+               var math = document.getElementById("MathExample");
+               MathJax.Hub.Queue(["Typeset",MathJax.Hub,math]);
+             }
+           },
+           "html");
+     };   |]
     [whamlet|
       <h1>#{page}</h1>
       <div #editform>
         <form method=post action=@{route} enctype=#{enctype}>
           ^{form}
           <input type=submit>
+          <input type=button onclick="updatePreviewPane()" value="Preview">
+     <div #previewpane>
     |]
 
 postUpdateR :: HasGitit master
@@ -868,6 +897,7 @@ editForm :: HasGitit master
          -> MForm (HandlerT master IO) (FormResult Edit, WidgetT master IO ())
 editForm mbedit = renderDivs $ Edit
     <$> areq textareaField (fieldSettingsLabel MsgPageSource)
+                             {fsId = Just "editpane"}
            (editContents <$> mbedit)
     <*> areq commentField (fieldSettingsLabel MsgChangeDescription)
            (editComment <$> mbedit)

@@ -108,7 +108,7 @@ makeDefaultPage layout content = do
     addScript $ staticR $ StaticRoute ["js","bootstrap.min.js"] []
     atomLink (toMaster AtomSiteR) "Atom feed for the wiki"
     toWidget $ [lucius|input.hidden { display: none; } |]
-    $(whamletFile "template/layout.hamlet")
+    $(whamletFile "template/original/layout.hamlet")
 
 -- HANDLERS and utility functions, not exported:
 
@@ -412,7 +412,7 @@ view mbrev page = do
                                    |])
                        atomLink (toMaster $ AtomPageR page)
                           "Atom link for this page"
-                       $(whamletFile "template/view.hamlet")
+                       $(whamletFile "template/original/view.hamlet")
 
 extractTocAbs :: HasGitit master
               => Maybe Int

@@ -95,7 +95,7 @@ textToPage :: Text -> Page
 textToPage x = Page $ T.splitOn "/" x
 
 instance ToMarkup Page where
-  toMarkup = toMarkup . pageToText
+  toMarkup (Page ps) = (toMarkup . last) ps
 
 instance ToMessage Page where
   toMessage = pageToText

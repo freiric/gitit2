@@ -536,13 +536,14 @@ contentsToWikiPage page contents = do
   let pageToPrefix (Page []) = T.empty
       pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
   Pandoc _ blocks <- sanitizePandoc <$> addWikiLinks (pageToPrefix page) doc
+  let lastTextFromPage (Page ps) = last ps
   foldM applyPlugin
            WikiPage {
              wpName        = pageToText page
            , wpFormat      = format
            , wpTOC         = toc
            , wpLHS         = lhs
-           , wpTitle       = toList $ text $ T.unpack $ pageToText page
+           , wpTitle       = toList $ text $ T.unpack $ lastTextFromPage page
            , wpCategories  = extractCategories metadata
            , wpMetadata    = metadata
            , wpCacheable   = True

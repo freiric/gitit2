@@ -181,7 +181,10 @@ convertWikiLinks prefix (Link ref ("", "")) = do
   toMaster <- getRouteToParent
   toUrl <- lift getUrlRender
   let route = ViewR $ textToPage $ T.append prefix $ T.pack $ stringify ref
-  return $ Link ref (T.unpack $ toUrl $ toMaster route, "")
+  let linkTitle = case ref of
+                    [Str refStr] -> [Str $ T.unpack $ last . T.splitOn "/" $ T.pack refStr]
+                    x -> x
+  return $ Link linkTitle (T.unpack $ toUrl $ toMaster route, "")
 convertWikiLinks prefix (Image ref ("", "")) = do
   toMaster <- getRouteToParent
   toUrl <- lift getUrlRender
@@ -1400,6 +1403,3 @@ hGetLinesTill h end = do
      else do
        rest <- hGetLinesTill h end
        return (next:rest)
-
-
-

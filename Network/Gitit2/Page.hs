@@ -8,8 +8,7 @@ import Data.Text (Text)
 import Yesod (toPathMultiPiece)
 import Yesod (fromPathMultiPiece)
 import Data.Monoid ((<>))
-import System.FilePath (takeExtension)
-import System.FilePath (dropExtension)
+import System.FilePath (dropExtension, takeExtension, (</>))
 
 -- | Path to a wiki page.  Page and page components can't begin with '_'.
 data Page = Page [Text] deriving (Show, Read, Eq)
@@ -41,6 +40,9 @@ instance ToMessage Page where
   toMessage = pageToText
 
 type PageExtension = FilePath
+
+pathForCategoriesP :: PageExtension -> Page -> FilePath
+pathForCategoriesP pageExtension page = T.unpack (toMessage page) <> pageExtension </> "categories"
 
 pathForPageP :: PageExtension -> Page -> FilePath
 pathForPageP pageExtension page = T.unpack (toMessage page) <> pageExtension

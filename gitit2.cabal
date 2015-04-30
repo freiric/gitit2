@@ -119,6 +119,7 @@ library
                  , blaze-builder                 >= 0.3        && < 0.5
                  , pandoc-types                  >= 1.12       && < 1.13
                  , HTTP                          >= 4000.2     && < 4000.3
+                 , aeson                         >= 0.7.0.5    && < 0.9
 
     ghc-options:  -Wall -fno-warn-unused-do-bind
 

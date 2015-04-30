@@ -5,7 +5,8 @@ module Network.Gitit2.Helper (
   isPageFile,
   isDiscussPageFile,
   pathForPage,
-  pageForPath
+  pageForPath,
+  pathForCategories
   ) where
 
 import Control.Applicative ((<$>))
@@ -13,7 +14,7 @@ import Control.Exception (handle, throw)
 import Data.ByteString.Lazy (ByteString)
 import Data.FileStore (FileStoreError(NotFound), retrieve, RevisionId)
 import Network.Gitit2.Foundation (config, filestore, GititConfig, GH, HasGitit, page_extension)
-import Network.Gitit2.Page (pathForPageP, pageForPathP, Page)
+import Network.Gitit2.Page (pathForPageP, pageForPathP, pathForCategoriesP, Page)
 import System.FilePath (takeExtension)
 import Yesod (getYesod, liftIO)
 import Data.FileStore (index)
@@ -21,6 +22,11 @@ import Control.Monad (filterM)
 
 getConfig :: GH master GititConfig
 getConfig = config <$> getYesod
+
+pathForCategories :: Page -> GH master FilePath
+pathForCategories page = do
+  conf <- getConfig
+  return $ pathForCategoriesP (page_extension conf) page
 
 pathForPage :: Page -> GH master FilePath
 pathForPage p = do

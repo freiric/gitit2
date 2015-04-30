@@ -38,7 +38,6 @@ import           Yesod.Static
 
 getViewR :: HasGitit master => Page -> GH master Html
 getViewR page = do
-  pathForPage page >>= tryCache
   tryCache $ pathForFile page
   view Nothing page
 
@@ -95,20 +94,40 @@ makeDefaultPage layout content = do
     toWidget $ [lucius|input.hidden { display: none; } |]
     $(whamletFile "templates/default_page.hamlet")
 
+-- | Retrieves categories and content from cache or create them and cache them
+wikifyAndCache :: HasGitit master
+               => Page
+               -> Maybe RevisionId
+               -> GH master (Maybe ([Text], Html))
+wikifyAndCache page mbrev = do
+  pagePath <- pathForPage page
+  catPath <- pathForCategories page
+  mbCatAndPageHtml <- do
+    mbPageHtml <- tryPageCache pagePath
+    mbCatTexts <- tryJSONCache catPath
+    return $ (,) <$>  mbCatTexts <*> mbPageHtml
+  maybe (do
+            mbcont <- getRawContents pagePath mbrev
+            case mbcont of
+              Just contents -> do
+                          wikipage <- contentsToWikiPage page contents
+                          htmlContents <- caching pagePath $ pageToHtml wikipage
+                          let categories = wpCategories wikipage
+                          cacheJSON catPath categories
+                          return $ Just (categories, htmlContents)
+              Nothing -> return Nothing)
+      (return . Just)
+      mbCatAndPageHtml
+
 view :: HasGitit master => Maybe RevisionId -> Page -> GH master Html
 view mbrev page = do
-  path <- pathForPage page
-  mbcont <- getRawContents path mbrev
-  case mbcont of
-       Just contents -> do
-         wikipage <- contentsToWikiPage page contents
-         htmlContents <- pageToHtml wikipage
-         let mbcache = if wpCacheable wikipage && isNothing mbrev
-                          then caching path
-                          else id
-         mbcache $ layout [ViewTab,EditTab,HistoryTab,DiscussTab]
-                            (wpCategories wikipage) htmlContents
-       Nothing -> do
+  mbCatAndPageHtml <- wikifyAndCache page mbrev
+  case mbCatAndPageHtml of
+    Just (categories, htmlContents) ->
+             layout [ViewTab,EditTab,HistoryTab,DiscussTab]
+                            categories
+                            htmlContents
+    Nothing -> do
          let path' = pathForFile page
          mbcont' <- getRawContents path' mbrev
          is_source <- isSourceFile path'

@@ -46,6 +46,9 @@ Source-repository head
 flag executable
   description:   Build the gitit executable.
   default:       True
+flag network-uri
+  Description:   Get Network.URI from the network-uri package
+  Default:       True
 
 library
     exposed-modules: Network.Gitit2
@@ -67,6 +70,7 @@ library
                    Network.Gitit2.Handler.View
                    Network.Gitit2.Helper
                    Network.Gitit2.Import
+                   Network.Gitit2.TableOfContent
 
     extensions: TemplateHaskell
                 QuasiQuotes
@@ -119,7 +123,13 @@ library
                  , blaze-builder                 >= 0.3        && < 0.5
                  , pandoc-types                  >= 1.12       && < 1.13
                  , HTTP                          >= 4000.2     && < 4000.3
+                 , mtl                           >= 1.1        && < 2.3
                  , aeson                         >= 0.7.0.5    && < 0.9
+    if flag(network-uri)
+       Build-Depends: network-uri                >= 2.6        && < 2.7
+                    , network                    >= 2.6
+    else
+       Build-Depends: network                    >= 2 && < 2.6
 
     ghc-options:  -Wall -fno-warn-unused-do-bind
 

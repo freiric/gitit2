@@ -1,0 +1,6 @@
+$(".toc-subpage-link")
+  .each(function(_index, tocSubpageLink){
+    var jTocSubpageLink = $(tocSubpageLink);
+    var subpageLinkIdent = jTocSubpageLink.attr("id").substr(4);
+    $("#" + subpageLinkIdent).html(jTocSubpageLink.clone().children());
+  });

@@ -1,13 +1,16 @@
+{-# LANGUAGE DeriveGeneric #-}
 module Network.Gitit2.WikiPage
        (
          extractCategories,
          PageFormat(..),
          WikiPage (..),
          readPageFormat,
-         contentToWikiPage'
+         contentToWikiPage',
+         GititToc (..)
        )
        where
 
+import qualified Data.Aeson as ASON
 import qualified Data.ByteString as BS
 import           Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as B
@@ -18,9 +21,21 @@ import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Yaml
+import           GHC.Generics
 import           Text.HTML.SanitizeXSS (sanitizeAttribute)
 import           Text.Pandoc
 import           Text.Pandoc.Builder (toList, text)
+
+
+-- | Data type equivalent to Element where only sections and single links in paragraph have been kept
+data GititToc = GititLink Int Text.Pandoc.Attr [Inline] Target
+                --        lvl attributes       label    link
+              | GititSec Int [Int] Text.Pandoc.Attr [Inline] [GititToc]
+                --       lvl num   attributes       label    contents
+                deriving (Eq, Read, Show, Generic)
+
+instance ASON.FromJSON GititToc
+instance ASON.ToJSON GititToc
 
 data WikiPage = WikiPage {
     wpName        :: Text
@@ -32,6 +47,7 @@ data WikiPage = WikiPage {
   , wpMetadata    :: M.Map Text Value
   , wpCacheable   :: Bool
   , wpContent     :: [Block]
+  , wpTocHierarchy :: [GititToc]
 } deriving (Show)
 
 extractCategories :: M.Map Text Value -> [Text]
@@ -74,6 +90,7 @@ contentToWikiPage' title contents converter defaultFormat simpleTitle =
            , wpMetadata    = metadata
            , wpCacheable   = True
            , wpContent     = blocks
+           , wpTocHierarchy = []
            }
   where
     (h,b) = stripHeader $ B.lines contents

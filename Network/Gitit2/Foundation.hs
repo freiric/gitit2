@@ -65,6 +65,9 @@ data GititConfig = GititConfig{
      , help_page        :: Text                     -- ^ Help page
      , latex_engine     :: Maybe FilePath           -- ^ LaTeX engine to use for PDF export
      , simple_title     :: Bool                     -- ^ Hide directory structure for wikilinks? If True `[dir/subdir/mySubpage]()` rendered as mySubpage.
+     , toc_depth        :: Maybe Int                -- ^ Depth of table of contents
+     , extended_toc     :: Bool                     -- ^ Toc extends over subpage
+     , subpage_toc_in_content :: Bool               -- ^ Subpage extends to their Toc in the content
      }
 
 -- | A user.

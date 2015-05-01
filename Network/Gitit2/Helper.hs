@@ -6,22 +6,29 @@ module Network.Gitit2.Helper (
   isDiscussPageFile,
   pathForPage,
   pageForPath,
-  pathForCategories
+  pathForCategories,
+  pathForToc
   ) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (handle, throw)
 import Data.ByteString.Lazy (ByteString)
-import Data.FileStore (FileStoreError(NotFound), retrieve, RevisionId)
+import Data.FileStore (FileStoreError(NotFound), index, retrieve, RevisionId)
+import Data.Monoid (mappend)
+import qualified Data.Text as T
 import Network.Gitit2.Foundation (config, filestore, GititConfig, GH, HasGitit, page_extension)
 import Network.Gitit2.Page (pathForPageP, pageForPathP, pathForCategoriesP, Page)
-import System.FilePath (takeExtension)
-import Yesod (getYesod, liftIO)
-import Data.FileStore (index)
+import System.FilePath ((</>), takeExtension)
+import Yesod (getYesod, liftIO, toMessage)
 import Control.Monad (filterM)
 
 getConfig :: GH master GititConfig
 getConfig = config <$> getYesod
+
+pathForToc :: Page -> GH master FilePath
+pathForToc p = do
+  conf <- getConfig
+  return $ T.unpack (toMessage p) `mappend` page_extension conf </> "toc"
 
 pathForCategories :: Page -> GH master FilePath
 pathForCategories page = do

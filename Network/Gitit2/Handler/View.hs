@@ -9,7 +9,7 @@ module Network.Gitit2.Handler.View (
   ) where
 
 import           Control.Exception (throw)
-import           Control.Monad (when, foldM)
+import           Control.Monad (foldM, when, void)
 import           Data.ByteString.Lazy (ByteString, fromStrict)
 import           Data.ByteString.Lazy.UTF8 (toString)
 import           Data.FileStore as FS
@@ -23,7 +23,8 @@ import           Data.Yaml
 import           Network.Gitit2.Cache
 import           Network.Gitit2.Import
 import           Network.Gitit2.Page (discussPageFor, isDiscussPage, Page(Page), pageToText, pathForFile, textToPage)
-import           Network.Gitit2.WikiPage (WikiPage(..), contentToWikiPage')
+import           Network.Gitit2.WikiPage (WikiPage(..), contentToWikiPage', GititToc)
+import           Network.Gitit2.TableOfContent
 import           System.FilePath
 import           Text.Blaze.Html hiding (contents)
 import           Text.Highlighting.Kate
@@ -94,18 +95,20 @@ makeDefaultPage layout content = do
     toWidget $ [lucius|input.hidden { display: none; } |]
     $(whamletFile "templates/default_page.hamlet")
 
--- | Retrieves categories and content from cache or create them and cache them
+-- | Retrieves table of contents, categories and content from cache or create them and cache them
 wikifyAndCache :: HasGitit master
                => Page
                -> Maybe RevisionId
-               -> GH master (Maybe ([Text], Html))
+               -> GH master (Maybe ([GititToc], [Text], Html))
 wikifyAndCache page mbrev = do
   pagePath <- pathForPage page
   catPath <- pathForCategories page
+  tocPath <- pathForToc page
   mbCatAndPageHtml <- do
     mbPageHtml <- tryPageCache pagePath
     mbCatTexts <- tryJSONCache catPath
-    return $ (,) <$>  mbCatTexts <*> mbPageHtml
+    mbTocPandoc <- tryJSONCache tocPath
+    return $ (,,) <$>  mbTocPandoc <*> mbCatTexts <*> mbPageHtml
   maybe (do
             mbcont <- getRawContents pagePath mbrev
             case mbcont of
@@ -113,8 +116,9 @@ wikifyAndCache page mbrev = do
                           wikipage <- contentsToWikiPage page contents
                           htmlContents <- caching pagePath $ pageToHtml wikipage
                           let categories = wpCategories wikipage
+                              tocHierarchy = wpTocHierarchy wikipage
                           cacheJSON catPath categories
-                          return $ Just (categories, htmlContents)
+                          return $ Just (tocHierarchy, categories, htmlContents)
               Nothing -> return Nothing)
       (return . Just)
       mbCatAndPageHtml
@@ -123,8 +127,9 @@ view :: HasGitit master => Maybe RevisionId -> Page -> GH master Html
 view mbrev page = do
   mbCatAndPageHtml <- wikifyAndCache page mbrev
   case mbCatAndPageHtml of
-    Just (categories, htmlContents) ->
+    Just (tocHierarchy, categories, htmlContents) ->
              layout [ViewTab,EditTab,HistoryTab,DiscussTab]
+                            tocHierarchy
                             categories
                             htmlContents
     Nothing -> do
@@ -138,14 +143,17 @@ view mbrev page = do
               Just contents
                | is_source -> do
                    htmlContents <- sourceToHtml path' contents
-                   caching path' $ layout [ViewTab,HistoryTab] [] htmlContents
+                   caching path' $ layout [ViewTab,HistoryTab] [] [] htmlContents
                | otherwise -> do
                   ct <- getMimeType path'
                   let content = toContent contents
                   caching path' (return (ct, content)) >>= sendResponse
-   where layout tabs categories cont = do
+   where layout tabs tocHierarchy categories cont = do
            toMaster <- getRouteToParent
            contw <- toWikiPage cont
+           mbTocDepth <- toc_depth <$> getConfig
+           mbToc <- extractToc mbTocDepth (pageToText page) wikifyAndCache tocHierarchy
+           subpageTocInContent <- subpage_toc_in_content <$> getConfig
            makePage pageLayout{ pgName = Just page
                               , pgPageTools = True
                               , pgTabs = tabs
@@ -154,6 +162,8 @@ view mbrev page = do
                                                    else ViewTab } $
                     do setTitle $ toMarkup page
                        toWidget $(juliusFile "templates/view.julius")
+                       when subpageTocInContent
+                        (void $ toWidget $(juliusFile "templates/replaceWikilinkBySubToc.julius"))
                        atomLink (toMaster $ AtomPageR page)
                           "Atom link for this page"
                        $(whamletFile "templates/view.hamlet")
@@ -166,7 +176,7 @@ contentsToWikiPage page contents = do
   let title = lastTextFromPage page
   let defaultFormat = default_format conf
       simpleTitle = simple_title conf
-  foldM applyPlugin (contentToWikiPage' title contents converter defaultFormat simpleTitle) plugins'
+  foldM applyPlugin (contentToWikiPage' title contents converter defaultFormat simpleTitle) (tocPlugin : plugins')
   where
     lastTextFromPage (Page ps) = last ps
     -- | Convert links with no URL to wikilinks.

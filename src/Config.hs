@@ -49,6 +49,9 @@ data Conf = Conf { cfg_port             :: Int
                  , cfg_max_upload_size  :: String
                  , cfg_latex_engine     :: Maybe FilePath
                  , cfg_simple_title     :: Bool
+                 , cfg_toc_depth        :: Maybe Int
+                 , cfg_extended_toc     :: Bool
+                 , cfg_subpage_toc_in_content :: Bool
                  }
 
 data FoundationSettings  = FoundationSettings {
@@ -90,6 +93,9 @@ parseConfig os = Conf
   <*> os `parseElem` "max_upload_size" .!= "1M"
   <*> os `parseElem` "latex_engine"
   <*> os `parseElem` "simple_title" .!= True
+  <*> os `parseElem` "toc_depth"
+  <*> os `parseElem` "extended_toc" .!= True
+  <*> os `parseElem` "subpage_toc_in_content" .!= True
 
 -- | Ready collection of common mime types. (Copied from
 -- Happstack.Server.HTTP.FileServe.)
@@ -130,6 +136,7 @@ readMimeTypesFile f = catch
              warn $ "Could not parse mime types file.\n" ++ show e
              return mimeTypes
 
+
 gititConfigFromConf :: Conf -> IO GititConfig
 gititConfigFromConf conf = do
   mimes <- case cfg_mime_types_file conf of
@@ -156,5 +163,8 @@ gititConfigFromConf conf = do
                            , help_page = cfg_help_page conf
                            , latex_engine = cfg_latex_engine conf
                            , simple_title = cfg_simple_title conf
+                           , toc_depth = cfg_toc_depth conf
+                           , extended_toc = cfg_extended_toc conf
+                           , subpage_toc_in_content =  cfg_subpage_toc_in_content conf
                            }
   return gconfig

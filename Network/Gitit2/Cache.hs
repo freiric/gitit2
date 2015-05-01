@@ -21,7 +21,7 @@ import           System.Directory (createDirectoryIfMissing, doesDirectoryExist,
                                    getDirectoryContents, getModificationTime, removeDirectoryRecursive)
 import           System.FilePath ((</>), takeDirectory)
 import           System.IO (withFile, IOMode(..))
-import           Text.Blaze.Html hiding (contents, text)
+import           Text.Blaze.Html hiding (contents)
 import           Yesod (Content(ContentBuilder), liftIO, sendFile, toTypedContent, ToTypedContent, TypedContent(TypedContent))
 
 cacheJSON :: ASON.ToJSON a => FilePath -> a -> GH master ()

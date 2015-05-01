@@ -1,4 +1,6 @@
 <h1 .title>#{page}
+$maybe toc <- mbToc
+  <div id="TOC">^{toc}
 $maybe rev <- mbrev
   <h2 .revision>#{rev}
 ^{contw}

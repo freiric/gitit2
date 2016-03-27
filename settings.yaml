@@ -44,4 +44,4 @@ latex_engine: xelatex
 # extended_toc: false
 
 # Replace a wikilink subpage with the toc of the subpage
-# subpage_toc_in_content: false
+subpage_toc_in_content: false

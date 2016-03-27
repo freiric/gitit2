@@ -9,6 +9,7 @@ import Network.Wai.Handler.Warp
 import Data.FileStore
 import Control.Applicative
 import Text.Pandoc
+import Text.Pandoc.Error (handleError)
 import qualified Text.Pandoc.UTF8 as UTF8
 import System.FilePath ((<.>), (</>))
 import Control.Monad (when, unless)
@@ -186,7 +187,7 @@ initializeRepo :: GititConfig -> FileStore -> IO ()
 initializeRepo gconfig fs = do
   putStrLn $ "Creating initial repository in " ++ repository_path gconfig
   Data.FileStore.initialize fs
-  let toPandoc = readMarkdown def{ readerSmart = True, readerParseRaw = True }
+  let toPandoc = handleError . readMarkdown def{ readerSmart = True, readerParseRaw = True }
   -- note: we convert this (markdown) to the default page format
   let converter f = do
         contents <- getDataFileName f >>= UTF8.readFile

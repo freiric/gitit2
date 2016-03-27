@@ -1,3 +1,4 @@
+{-# LANGUAGE ViewPatterns           #-}
 {-# LANGUAGE TypeFamilies, QuasiQuotes, MultiParamTypeClasses,
              TemplateHaskell, OverloadedStrings, FlexibleInstances,
              FlexibleContexts, ScopedTypeVariables, TupleSections,
@@ -31,12 +32,13 @@ import Data.Char (toLower)
 import System.FilePath
 import Data.List (inits, find, sortBy, isPrefixOf, sort, nub, intercalate)
 import Text.Pandoc
+import Text.Pandoc.Error (handleError)
 import qualified Text.Pandoc.Writers.HTML as PWH (defaultWriterState, WriterState, inlineListToHtml, unordList)
 import Text.Pandoc.Writers.RTF (writeRTFWithEmbeddedImages)
 import Text.Pandoc.PDF (makePDF)
 import Text.Pandoc.Shared (stringify, inDirectory, readDataFileUTF8, hierarchicalize, Element(..))
 import Text.Pandoc.SelfContained (makeSelfContained)
-import Text.Pandoc.Builder (toList, text)
+import Text.Pandoc.Builder as PB (toList, text) 
 import Control.Applicative
 import Control.Monad.State
 import qualified Data.Text as T
@@ -112,25 +114,25 @@ makeDefaultPage layout content = do
 
 -- | Convert links with no URL to wikilinks.
 convertWikiLinks :: Text -> Inline -> GH master Inline
-convertWikiLinks prefix (Link ref ("", "")) = do
+convertWikiLinks prefix (Link attr ref ("", "")) = do
   toMaster <- getRouteToParent
   toUrl <- lift getUrlRender
   let route = ViewR $ textToPage $ T.append prefix $ T.pack $ stringify ref
-  return $ Link ref (T.unpack $ toUrl $ toMaster route, "")
-convertWikiLinks prefix (Image ref ("", "")) = do
+  return $ Link attr ref (T.unpack $ toUrl $ toMaster route, "")
+convertWikiLinks prefix (Image attr ref ("", "")) = do
   toMaster <- getRouteToParent
   toUrl <- lift getUrlRender
   let route = ViewR $ textToPage $ T.append prefix $ T.pack $ stringify ref
-  return $ Image ref (T.unpack $ toUrl $ toMaster route, "")
+  return $ Image attr ref (T.unpack $ toUrl $ toMaster route, "")
 convertWikiLinks _ x = return x
 
 addWikiLinks :: Text -> Pandoc -> GH master Pandoc
 addWikiLinks prefix = bottomUpM (convertWikiLinks prefix)
 
 identifyParWikiLinks :: Block -> GH master Block
-identifyParWikiLinks (Para [Link inlines target]) = do
+identifyParWikiLinks (Para [Link attr inlines target]) = do
   ident <- newIdent
-  return $ Div (T.unpack ident,["subpage-link"],[]) [Para [Link inlines target]]
+  return $ Div (T.unpack ident,["subpage-link"],[]) [Para [Link attr inlines target]]
 identifyParWikiLinks x = return x
 
 addSubpageClass :: Pandoc -> GH master Pandoc
@@ -144,8 +146,8 @@ sanitizePandoc = bottomUp sanitizeBlock . bottomUp sanitizeInline
         sanitizeInline (RawInline _ _) = Str ""
         sanitizeInline (Code (id',classes,attrs) x) =
           Code (id', classes, sanitizeAttrs attrs) x
-        sanitizeInline (Link lab (src,tit)) = Link lab (sanitizeURI src,tit)
-        sanitizeInline (Image alt (src,tit)) = Image alt (sanitizeURI src,tit)
+        sanitizeInline (Link attr lab (src,tit)) = Link attr lab (sanitizeURI src,tit)
+        sanitizeInline (Image attr alt (src,tit)) = Image attr alt (sanitizeURI src,tit)
         sanitizeInline x = x
         sanitizeURI src = case sanitizeAttribute ("href", T.pack src) of
                                Just (_,z) -> T.unpack z
@@ -421,7 +423,7 @@ extractTocAbs :: HasGitit master
               -> [a]
               -> GH master (Maybe (WidgetT master IO ()))
 extractTocAbs mbTocDepth tocFun prefix tocHierrarchy = do
-  let opts = def { writerWrapText = False
+  let opts = def { writerWrapText = WrapNone
                  , writerHtml5 = True
                  , writerHighlight = True
                  , writerHTMLMathMethod = MathML Nothing
@@ -498,7 +500,7 @@ getRawContents path rev = do
 pageToHtml :: HasGitit master => WikiPage -> GH master Html
 pageToHtml wikiPage =
   return $ writeHtml def{
-               writerWrapText = False
+               writerWrapText = WrapNone
              , writerHtml5 = True
              , writerHighlight = True
              , writerHTMLMathMethod = MathML Nothing
@@ -543,7 +545,7 @@ contentsToWikiPage page contents = do
   let fromBool (Bool t) = t
       fromBool _        = False
   let toc = maybe False fromBool (M.lookup "toc" metadata)
-  let doc = reader $ toString b
+  let doc = handleError. reader $ toString b
   let pageToPrefix (Page []) = T.empty
       pageToPrefix (Page ps) = T.intercalate "/" $ init ps ++ [T.empty]
   docWithIdForSubpage <- addSubpageClass doc
@@ -555,7 +557,7 @@ contentsToWikiPage page contents = do
            , wpFormat      = format
            , wpTOC         = toc
            , wpLHS         = lhs
-           , wpTitle       = toList $ text $ T.unpack $ pageToText page
+           , wpTitle       = PB.toList $ PB.text $ T.unpack $ pageToText page
            , wpCategories  = extractCategories metadata
            , wpMetadata    = metadata
            , wpCacheable   = True
@@ -1590,8 +1592,8 @@ inlinesToString = concatMap go
                Math InlineMath s       -> "$" ++ s ++ "$"
                RawInline (Format "tex") s -> s
                RawInline _ _           -> ""
-               Link xs _               -> concatMap go xs
-               Image xs _              -> concatMap go xs
+               Link attr xs _               -> concatMap go xs
+               Image attr xs _              -> concatMap go xs
                Note _                  -> ""
                Span _ xs               -> concatMap go xs
 
@@ -1610,6 +1612,6 @@ stripElementForToc True lev (Blk block) =
 
 fetchLink :: Block -> [(Text.Pandoc.Attr, [Inline], Target)]
 fetchLink = queryWith isLinkInPar
-    where isLinkInPar (Div (ident,["subpage-link"],[]) [Para [Link inlines target]])
+    where isLinkInPar (Div (ident,["subpage-link"],[]) [Para [Link attr inlines target]])
               = [((ident,["subpage-link"],[]), inlines, target)]
           isLinkInPar _ = []

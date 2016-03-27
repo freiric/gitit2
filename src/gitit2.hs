@@ -26,6 +26,7 @@ import Error
 import ArgParser
 
 import Network.Gitit2.WikiPage (PageFormat(..), wpContent)
+import           Text.Pandoc.Error (handleError)
 
 data Master = Master { settings :: FoundationSettings
                      , getGitit    :: Gitit
@@ -190,7 +191,7 @@ initializeRepo :: GititConfig -> FileStore -> IO ()
 initializeRepo gconfig fs = do
   putStrLn $ "Creating initial repository in " ++ repository_path gconfig
   Data.FileStore.initialize fs
-  let toPandoc = readMarkdown def{ readerSmart = True, readerParseRaw = True }
+  let toPandoc = handleError . readMarkdown def{ readerSmart = True, readerParseRaw = True }
   -- note: we convert this (markdown) to the default page format
   let converter f = do
         contents <- getDataFileName f >>= UTF8.readFile

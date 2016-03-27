@@ -34,7 +34,7 @@ extractTocAbs :: HasGitit master
               -> [a]
               -> GH master (Maybe (WidgetT master IO ()))
 extractTocAbs mbTocDepth tocFun prefix wikifyAndCache tocHierrarchy = do
-  let opts = def { writerWrapText = False
+  let opts = def { writerWrapText = WrapNone
                  , writerHtml5 = True
                  , writerHighlight = True
                  , writerHTMLMathMethod = MathML Nothing
@@ -186,8 +186,8 @@ inlinesToString = concatMap go
                Math InlineMath s       -> "$" ++ s ++ "$"
                RawInline (Format "tex") s -> s
                RawInline _ _           -> ""
-               Link xs _               -> concatMap go xs
-               Image xs _              -> concatMap go xs
+               Link _ xs _             -> concatMap go xs
+               Image _ xs _            -> concatMap go xs
                Note _                  -> ""
                Span _ xs               -> concatMap go xs
 
@@ -206,7 +206,7 @@ stripElementForToc True lev (Blk block) =
 
 fetchLink :: Block -> [(Text.Pandoc.Attr, [Inline], Target)]
 fetchLink = queryWith isLinkInPar
-    where isLinkInPar (Div (ident,["subpage-link"],[]) [Para [Link inlines target]])
+    where isLinkInPar (Div (ident,["subpage-link"],[]) [Para [Link attr inlines target]])
               = [((ident,["subpage-link"],[]), inlines, target)]
           isLinkInPar _ = []
 
@@ -224,7 +224,7 @@ tocPlugin = Plugin {
                     }
 
 addIdAndClassToParWikiLinks :: Block -> GH master Block
-addIdAndClassToParWikiLinks (Para [Link inlines target]) = do
+addIdAndClassToParWikiLinks (Para [Link attr inlines target]) = do
   ident <- newIdent
-  return $ Div (T.unpack ident,["subpage-link"],[]) [Para [Link inlines target]]
+  return $ Div (T.unpack ident,["subpage-link"],[]) [Para [Link attr inlines target]]
 addIdAndClassToParWikiLinks x = return x

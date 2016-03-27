@@ -25,6 +25,7 @@ import           GHC.Generics
 import           Text.HTML.SanitizeXSS (sanitizeAttribute)
 import           Text.Pandoc
 import           Text.Pandoc.Builder (toList, text)
+import           Text.Pandoc.Error (handleError)
 
 
 -- | Data type equivalent to Element where only sections and single links in paragraph have been kept
@@ -118,11 +119,12 @@ contentToWikiPage' title contents converter defaultFormat simpleTitle =
     fromBool (Bool t) = t
     fromBool _        = False
     toc = maybe False fromBool (M.lookup "toc" metadata)
-    doc = reader $ toString b
+    doc = handleError . reader $ toString b
     Pandoc _ blocks = sanitizePandoc $ addWikiLinks doc
+    
     convertWikiLinks :: Inline -> Inline
-    convertWikiLinks (Link ref ("", "")) = Link (linkTitle ref) (converter ref, "")
-    convertWikiLinks (Image ref ("", "")) = Image ref (converter ref, "")
+    convertWikiLinks (Link attr ref ("", "")) = Link attr (linkTitle ref) (converter ref, "")
+    convertWikiLinks (Image attr ref ("", "")) = Image attr ref (converter ref, "")
     convertWikiLinks x = x
 
     linkTitle [Str refStr] | simpleTitle = [Str $ T.unpack $ last . T.splitOn "/" $ T.pack refStr]
@@ -152,8 +154,8 @@ contentToWikiPage' title contents converter defaultFormat simpleTitle =
         sanitizeInline (RawInline _ _) = Str ""
         sanitizeInline (Code (id',classes,attrs) x) =
           Code (id', classes, sanitizeAttrs attrs) x
-        sanitizeInline (Link lab (src,tit)) = Link lab (sanitizeURI src,tit)
-        sanitizeInline (Image alt (src,tit)) = Image alt (sanitizeURI src,tit)
+        sanitizeInline (Link attr lab (src,tit)) = Link attr lab (sanitizeURI src,tit)
+        sanitizeInline (Image attr alt (src,tit)) = Image attr alt (sanitizeURI src,tit)
         sanitizeInline x = x
         sanitizeURI src = case sanitizeAttribute ("href", T.pack src) of
                                Just (_,z) -> T.unpack z

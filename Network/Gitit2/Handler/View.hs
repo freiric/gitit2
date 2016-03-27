@@ -246,7 +246,7 @@ getExportFormats = do
 pageToHtml :: HasGitit master => WikiPage -> GH master Html
 pageToHtml wikiPage =
   return $ writeHtml def{
-               writerWrapText = False
+               writerWrapText = WrapNone
              , writerHtml5 = True
              , writerHighlight = True
              , writerHTMLMathMethod = MathML Nothing
